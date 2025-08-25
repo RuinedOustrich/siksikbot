@@ -1,6 +1,6 @@
 python-telegram-bot==20.6
 requests==2.31.0
 python-dotenv==1.0.0
-tiktoken==0.6.0
-openai>=1.0
-ffmpeg-python
+aiofiles==23.2.1
+pydantic==2.5.0
+pydantic-settings==2.1.0
