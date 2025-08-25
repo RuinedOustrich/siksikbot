@@ -18,8 +18,8 @@ from utils.rate_limiter import rate_limiter
 
 # Импорты обработчиков
 from bot.handlers.commands import (
-    start, reset_context, help_command, roles_command, setrole_command,
-    resetrole_command, prompt_command, setprompt_command, resetprompt_command,
+    start, reset_context, help_command, roles_command,
+    prompt_command, setprompt_command, resetprompt_command,
     update_commands_command, contextlimit_command, setcontextlimit_command,
     imagine_command
 )
@@ -62,8 +62,6 @@ async def set_bot_commands(application):
         BotCommand("setprompt", "✏️ Изменить системный промпт"),
         BotCommand("resetprompt", "🔄 Сбросить промпт к значению по умолчанию"),
         BotCommand("roles", "🎭 Показать доступные роли"),
-        BotCommand("setrole", "🎭 Выбрать роль (философ|психолог|астролог|быдло)"),
-        BotCommand("resetrole", "🎭 Сбросить роль к умолчанию"),
         BotCommand("contextlimit", "📏 Показать текущий лимит контекста"),
         BotCommand("setcontextlimit", "✏️ Установить лимит контекста (напр. 30)"),
         BotCommand("imagine", "🖼️ Сгенерировать изображение по описанию")
@@ -113,8 +111,6 @@ def setup_handlers(application):
     application.add_handler(CommandHandler("setprompt", setprompt_command), group=0)
     application.add_handler(CommandHandler("resetprompt", resetprompt_command), group=0)
     application.add_handler(CommandHandler("roles", roles_command), group=0)
-    application.add_handler(CommandHandler("setrole", setrole_command), group=0)
-    application.add_handler(CommandHandler("resetrole", resetrole_command), group=0)
     application.add_handler(CommandHandler("contextlimit", contextlimit_command), group=0)
     application.add_handler(CommandHandler("setcontextlimit", setcontextlimit_command), group=0)
     application.add_handler(CommandHandler("updatecmds", update_commands_command), group=0)

@@ -63,15 +63,18 @@ async def imagine_callback(update: Update, context: CallbackContext):
                 prompt = ""
             seed = None
         elif len(parts) == 3:
-            _, size_part, seed = parts
-            # Промпт берём из подписи текущего сообщения
+            # Обратная совместимость со старыми кнопками: третий параметр мог быть seed, но мы его игнорируем
+            _, size_part, _legacy_seed = parts
             if query.message:
                 original_caption = (query.message.caption or "")
                 prompt = original_caption.split("\n\n🎨", 1)[0].strip()
             else:
                 prompt = ""
+            seed = None
         elif len(parts) >= 4:
-            _, size_part, prompt, seed = parts[:4]
+            # Обратная совместимость: старый формат с явным prompt и seed
+            _, size_part, prompt, _legacy_seed = parts[:4]
+            seed = None
         else:
             raise ValueError("invalid callback format")
         w_str, h_str = size_part.lower().split("x", 1)
@@ -105,7 +108,7 @@ async def imagine_callback(update: Update, context: CallbackContext):
             await query.edit_message_caption(caption="❌ Не удалось сгенерировать изображение")
             return
         next_seed = random.randint(1, 2**31 - 1)
-        callback_data = f"imagine::{width}x{height}::{next_seed}"
+        callback_data = f"imagine::{width}x{height}"
         # Лог для отладки длины callback_data
         try:
             logger.debug("regen callback_data=%r len=%d", callback_data, len(callback_data.encode('utf-8')))

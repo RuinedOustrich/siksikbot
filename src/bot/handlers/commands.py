@@ -31,11 +31,12 @@ async def start(update: Update, context: CallbackContext):
             "/start - начать диалог\n"
             "/reset - очистить историю диалога\n"
             "/help - показать справку\n"
+            "/roles - показать роли\n"
+            "/imagine - сгенерировать изображение\n"    
             "/prompt - показать текущий системный промпт\n"
             "/setprompt - изменить системный промпт\n"
+            "/resetprompt - сбросить промпт к значению по умолчанию\n"
             "/roles - показать роли\n"
-            "/setrole <роль> - выбрать роль (storyteller | psychologist | rude)\n"
-            "/resetrole - сбросить роль\n"
             "/contextlimit - показать текущий лимит контекста\n"
             "/setcontextlimit <число> - установить лимит контекста\n"
             "/updatecmds - обновить меню команд\n\n"
@@ -51,11 +52,11 @@ async def start(update: Update, context: CallbackContext):
             "/start - начать диалог\n"
             "/reset - очистить историю диалога\n"
             "/help - показать справку\n"
+            "/roles - показать роли\n"
+            "/imagine - сгенерировать изображение\n"    
             "/prompt - показать текущий системный промпт\n"
             "/setprompt - изменить системный промпт\n"
-            "/roles - показать роли\n"
-            "/setrole <роль> - выбрать роль (storyteller | psychologist | rude)\n"
-            "/resetrole - сбросить роль\n"
+            "/resetprompt - сбросить промпт к значению по умолчанию\n"
             "/contextlimit - показать текущий лимит контекста\n"
             "/setcontextlimit <число> - установить лимит контекста\n"
             "/updatecmds - обновить меню команд\n\n"
@@ -88,14 +89,13 @@ async def help_command(update: Update, context: CallbackContext):
         "/start — начать диалог\n"
         "/reset — очистить историю диалога\n"
         "/help — показать эту справку\n"
+        "/roles — показать доступные роли\n"
+        "/imagine — сгенерировать изображение\n"
         "/prompt — показать текущий системный промпт\n"
         "/setprompt — изменить системный промпт\n"
-        "/roles — показать доступные роли\n"
-        "/setrole — выбрать роль\n"
-        "/resetrole — сбросить роль\n"
+        "/resetprompt - сбросить промпт к значению по умолчанию\n"
         "/contextlimit — показать лимит контекста\n"
         "/setcontextlimit — установить лимит контекста\n"
-        "/imagine — сгенерировать изображение\n"
         "/updatecmds — обновить меню команд\n\n"
         "💡 **Особенности:**\n"
         "• Поддержка голосовых сообщений\n"
@@ -108,58 +108,17 @@ async def help_command(update: Update, context: CallbackContext):
 
 
 async def roles_command(update: Update, context: CallbackContext):
-    roles_text = (
-        "🎭 **Доступные роли:**\n\n"
-        "**storyteller** — рассказчик историй\n"
-        "• Создает увлекательные истории\n"
-        "• Использует яркие образы\n"
-        "• Развивает сюжетные линии\n\n"
-        "**psychologist** — психолог\n"
-        "• Анализирует ситуации\n"
-        "• Дает советы и рекомендации\n"
-        "• Помогает разобраться в чувствах\n\n"
-        "**rude** — грубый собеседник\n"
-        "• Прямолинейные ответы\n"
-        "• Критический подход\n"
-        "• Без прикрас\n\n"
-        "**astrologer** — астролог\n"
-        "• Астрологические прогнозы\n"
-        "• Анализ знаков зодиака\n"
-        "• Эзотерические советы\n\n"
-        "💡 Используйте /setrole <роль> для выбора"
+    roles = context_manager.get_available_roles()
+    keyboard = [[InlineKeyboardButton(role.capitalize(), callback_data=f"role::{role}")] for role in roles]
+    keyboard.append([InlineKeyboardButton("Сбросить роль", callback_data="role::reset")])
+    await update.message.reply_text(
+        "🎭 Выберите роль:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    await update.message.reply_text(roles_text)
 
 
-async def setrole_command(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    args = context.args
-    
-    if not args:
-        await update.message.reply_text(
-            "❌ Укажите роль! Пример: /setrole storyteller\n"
-            "Доступные роли: storyteller, psychologist, rude, astrologer"
-        )
-        return
-    
-    role = args[0].lower()
-    valid_roles = ['storyteller', 'psychologist', 'rude', 'astrologer']
-    
-    if role not in valid_roles:
-        await update.message.reply_text(
-            f"❌ Неизвестная роль: {role}\n"
-            f"Доступные роли: {', '.join(valid_roles)}"
-        )
-        return
-    
-    context_manager.set_role(chat_id, role)
-    await update.message.reply_text(f"✅ Роль установлена: {role}")
 
 
-async def resetrole_command(update: Update, context: CallbackContext):
-    chat_id = update.effective_chat.id
-    context_manager.reset_role(chat_id)
-    await update.message.reply_text("✅ Роль сброшена к значению по умолчанию")
 
 
 async def prompt_command(update: Update, context: CallbackContext):
@@ -203,8 +162,6 @@ async def update_commands_command(update: Update, context: CallbackContext):
             BotCommand("setprompt", "✏️ Изменить системный промпт"),
             BotCommand("resetprompt", "🔄 Сбросить промпт к значению по умолчанию"),
             BotCommand("roles", "🎭 Показать доступные роли"),
-            BotCommand("setrole", "🎭 Выбрать роль (storyteller|psychologist|astrologer|rude)"),
-            BotCommand("resetrole", "🎭 Сбросить роль к умолчанию"),
             BotCommand("contextlimit", "📏 Показать текущий лимит контекста"),
             BotCommand("setcontextlimit", "✏️ Установить лимит контекста (напр. 30)"),
             BotCommand("imagine", "🖼️ Сгенерировать изображение по описанию"),
@@ -294,7 +251,7 @@ async def imagine_command(update: Update, context: CallbackContext):
             await status.edit_text("❌ Не удалось сгенерировать изображение")
             return
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Перегенерировать", callback_data=f"imagine::{width}x{height}::{seed}")],
+            [InlineKeyboardButton("Перегенерировать", callback_data=f"imagine::{width}x{height}")],
         ])
         # Отправляем без источника в подписи — по просьбе пользователя
         await context.bot.send_photo(chat_id=chat_id, photo=content, caption=f"{prompt}", reply_markup=keyboard)

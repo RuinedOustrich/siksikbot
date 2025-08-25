@@ -30,7 +30,8 @@ async def handle_message(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     user = update.effective_user
     
-    logger.info(f"Получено текстовое сообщение от пользователя {user.id} в чате {chat_id}: {message.text[:50]}...")
+    safe_preview = (message.text or message.caption or "")[:50]
+    logger.info(f"Получено текстовое сообщение от пользователя {user.id} в чате {chat_id}: {safe_preview}...")
     
     # Проверяем rate limiting
     if not context_manager.check_rate_limit(user.id, min_interval=1.0):
@@ -169,8 +170,8 @@ async def handle_voice(update: Update, context: CallbackContext):
 
     # Проверяем размер файла
     file_size_mb = voice.file_size / (1024 * 1024) if voice.file_size else 0
-    if file_size_mb > 50:  # 50MB лимит
-        await message.reply_text("❌ Файл слишком большой! Максимальный размер: 50MB")
+    if file_size_mb > settings.max_voice_size_mb:
+        await message.reply_text(f"❌ Файл слишком большой! Максимальный размер: {settings.max_voice_size_mb}MB")
         return
 
     context_manager.set_generating(chat_id, True)
@@ -338,8 +339,8 @@ async def handle_image(update: Update, context: CallbackContext):
 
     # Проверяем размер файла
     file_size_mb = photo.file_size / (1024 * 1024) if photo.file_size else 0
-    if file_size_mb > 10:  # 10MB лимит
-        await message.reply_text("❌ Файл слишком большой! Максимальный размер: 10MB")
+    if file_size_mb > settings.max_image_size_mb:
+        await message.reply_text(f"❌ Файл слишком большой! Максимальный размер: {settings.max_image_size_mb}MB")
         return
 
     context_manager.set_generating(chat_id, True)
