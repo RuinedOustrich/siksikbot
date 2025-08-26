@@ -1,18 +1,18 @@
 import os
 import logging
-import signal
 import sys
 import subprocess
 import asyncio
 
 # Добавляем src в путь для импортов
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from telegram import BotCommand, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
 from config.settings import settings
 from services.context_manager import context_manager
+from services.pollinations_service import close_http_session
 from utils.rate_limiter import rate_limiter
 # Убираем импорт delete_advertisement - больше не используется
 
@@ -20,11 +20,11 @@ from utils.rate_limiter import rate_limiter
 from bot.handlers.commands import (
     start, reset_context, help_command, roles_command,
     prompt_command, setprompt_command, resetprompt_command,
-    update_commands_command, contextlimit_command, setcontextlimit_command,
-    imagine_command
+    update_commands_command,
+    imagine_command, settings_command, health_command, stop_command
 )
 from bot.handlers.messages import handle_message, handle_voice, handle_image
-from bot.handlers.callbacks import role_callback, imagine_callback
+from bot.handlers.callbacks import role_callback, imagine_callback, settings_callback, imagine_size_callback, imagine_style_callback, imagine_new_callback, force_stop_callback
 from bot.handlers.errors import error_handler
 
 
@@ -62,9 +62,10 @@ async def set_bot_commands(application):
         BotCommand("setprompt", "✏️ Изменить системный промпт"),
         BotCommand("resetprompt", "🔄 Сбросить промпт к значению по умолчанию"),
         BotCommand("roles", "🎭 Показать доступные роли"),
-        BotCommand("contextlimit", "📏 Показать текущий лимит контекста"),
-        BotCommand("setcontextlimit", "✏️ Установить лимит контекста (напр. 30)"),
-        BotCommand("imagine", "🖼️ Сгенерировать изображение по описанию")
+        BotCommand("settings", "⚙️ Открыть меню настроек"),
+        BotCommand("imagine", "🖼️ Сгенерировать изображение по описанию"),
+        BotCommand("stop", "🛑 Принудительно остановить все операции"),
+        BotCommand("health", "🏥 Показать состояние бота")
     ]
     
     try:
@@ -81,13 +82,18 @@ async def main():
             logger.error("FFmpeg не найден! Установите ffmpeg для обработки голосовых сообщений.")
             logger.warning("Бот запустится без поддержки голосовых сообщений")
 
-        # Создаем приложение с настройками из конфигурации
-        application = Application.builder().token(settings.telegram_bot_token).build()
+        # Создаем приложение с настройками из конфигурации и ВКЛЮЧАЕМ ПАРАЛЛЕЛЬНУЮ ОБРАБОТКУ
+        application = Application.builder().token(settings.telegram_bot_token).concurrent_updates(True).build()
         
-        # Настраиваем таймауты
+        # Настраиваем таймауты и лимиты для параллельных запросов
         application.bot.request.timeout = settings.api_timeout
         application.bot.request.connect_timeout = settings.api_timeout // 2
         application.bot.request.read_timeout = settings.api_timeout
+        
+        # ВАЖНО: Увеличиваем лимиты для параллельных запросов
+        # По умолчанию Telegram Bot API ограничивает количество одновременных запросов
+        application.bot.request.connection_pool_size = 100  # Увеличиваем пул соединений
+        application.bot.request.connection_pool_maxsize = 100  # Максимальный размер пула
         
         logger.info("Бот инициализирован успешно")
         
@@ -111,12 +117,19 @@ def setup_handlers(application):
     application.add_handler(CommandHandler("setprompt", setprompt_command), group=0)
     application.add_handler(CommandHandler("resetprompt", resetprompt_command), group=0)
     application.add_handler(CommandHandler("roles", roles_command), group=0)
-    application.add_handler(CommandHandler("contextlimit", contextlimit_command), group=0)
-    application.add_handler(CommandHandler("setcontextlimit", setcontextlimit_command), group=0)
     application.add_handler(CommandHandler("updatecmds", update_commands_command), group=0)
     application.add_handler(CommandHandler("imagine", imagine_command), group=0)
+    application.add_handler(CommandHandler("settings", settings_command), group=0)
+    application.add_handler(CommandHandler("health", health_command), group=0)
+    application.add_handler(CommandHandler("stop", stop_command), group=0)
+
     application.add_handler(CallbackQueryHandler(role_callback, pattern=r"^role::"), group=0)
     application.add_handler(CallbackQueryHandler(imagine_callback, pattern=r"^imagine::"), group=0)
+    application.add_handler(CallbackQueryHandler(settings_callback, pattern=r"^settings::"), group=0)
+    application.add_handler(CallbackQueryHandler(imagine_size_callback, pattern=r"^imagine_size::"), group=0)
+    application.add_handler(CallbackQueryHandler(imagine_style_callback, pattern=r"^imagine_style::"), group=0)
+    application.add_handler(CallbackQueryHandler(imagine_new_callback, pattern=r"^imagine_new"), group=0)
+    application.add_handler(CallbackQueryHandler(force_stop_callback, pattern=r"^force_stop"), group=0)
 
     # Убираем глобальную проверку рекламы - теперь она только в ответах AI
 
@@ -136,8 +149,8 @@ async def run_bot():
     application = await main()
     setup_handlers(application)
     
-    # Временно отключаем rate limiter cleanup task для отладки
-    # rate_limiter.start_cleanup_task()
+    # Запускаем cleanup task для rate limiter
+    rate_limiter.start_cleanup_task()
     
     logger.info("Запуск бота...")
     
@@ -147,6 +160,9 @@ async def run_bot():
     # Инициализируем и запускаем приложение
     await application.initialize()
     await application.start()
+
+    # Устанавливаем команды бота
+    await set_bot_commands(application)
     
     # Запускаем polling
     await application.updater.start_polling(
@@ -164,13 +180,9 @@ async def run_bot():
     # Останавливаем приложение
     await application.stop()
     await application.shutdown()
-
-
-def signal_handler(signum, frame):
-    """Обработчик сигналов для корректного завершения"""
-    logger.info(f"Получен сигнал {signum}")
-    logger.info("Получен сигнал остановки: %s", frame)
-    # Не используем sys.exit() здесь, так как это может прервать asyncio
+    
+    # Закрываем HTTP сессию
+    await close_http_session()
 
 
 if __name__ == "__main__":

@@ -1,40 +1,62 @@
-# Базовый образ
-FROM python:3.12-slim
+# ===== BUILD STAGE =====
+FROM python:3.12-slim AS builder
 
-# Установка зависимостей ОС
+# Консервативные настройки Python
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=UTF-8
+
+# Build dependencies для компиляции psutil и других пакетов
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    libssl-dev \
-    ffmpeg \
-    curl \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Создание непривилегированного пользователя
+# Установка python-зависимостей
+COPY ../requirements.txt /requirements.txt
+RUN pip install --no-cache-dir -U pip && \
+    pip install --no-cache-dir --user -r /requirements.txt
+
+# ===== RUNTIME STAGE =====
+FROM python:3.12-slim
+
+# Консервативные настройки Python
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=UTF-8 \
+    PATH=/home/botuser/.local/bin:$PATH
+
+# Только runtime зависимости (без build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Непривилегированный пользователь
 RUN groupadd -r botuser && useradd -r -g botuser botuser
+
+# Копируем установленные Python пакеты из builder stage
+COPY --from=builder /root/.local /home/botuser/.local
+RUN chown -R botuser:botuser /home/botuser/.local
 
 # Рабочая директория
 WORKDIR /app
 
-# Копирование зависимостей
-COPY requirements.txt .
+# Создаем каталог для логов перед копированием
+RUN mkdir -p /app/logs
 
-# Установка Python-зависимостей
-RUN pip install --no-cache-dir -U pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir certifi --force-reinstall
+# Копирование исходников (файлы, исключённые .dockerignore, не попадут в образ)
+COPY ../ /app
 
-# Копирование исходного кода
-COPY . .
+# Устанавливаем права на файлы
+RUN chown -R botuser:botuser /app
 
-# Создание директории для логов
-RUN mkdir -p /app/logs && chown -R botuser:botuser /app
-
-# Переключение на непривилегированного пользователя
+# Запуск от непривилегированного пользователя
 USER botuser
 
-# Проверка здоровья
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD python3 docker/healthcheck.py || exit 1
 
-# Команда запуска
+# Точка входа
 CMD ["python3", "run.py"]

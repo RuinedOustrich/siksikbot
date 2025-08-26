@@ -4,6 +4,7 @@ import re
 from telegram.constants import ChatAction, ParseMode
 from telegram import Update
 from telegram.ext import CallbackContext
+from config.settings import settings
 
 
 logger = logging.getLogger(__name__)
@@ -16,12 +17,17 @@ ADVERTISEMENT_REGEX = re.compile(
 
 
 async def show_typing(context: CallbackContext, chat_id: int):
-    while True:
-        try:
-            await context.bot.send_chat_action(chat_id, action=ChatAction.TYPING)
-        except Exception as e:
-            logger.debug(f"show_typing error: {e}")
-        await asyncio.sleep(5)
+    try:
+        interval = getattr(settings, "typing_interval", 5)
+        while True:
+            try:
+                await context.bot.send_chat_action(chat_id, action=ChatAction.TYPING)
+            except Exception as e:
+                logger.debug(f"show_typing error: {e}")
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        logger.debug("show_typing task cancelled")
+        return
 
 
 def _escape_markdown(text: str) -> str:
@@ -30,7 +36,46 @@ def _escape_markdown(text: str) -> str:
     return text
 
 
+def format_for_telegram_markdown(text: str) -> str:
+    """Преобразует распространённые, но неподдерживаемые конструкции Markdown в формат Telegram Markdown.
+
+    Что делаем:
+    - Заголовки вида #, ##, ###, ... конвертируем в жирную строку: "*Заголовок*"
+    - Внутри блоков кода ```...``` ничего не меняем
+    """
+    try:
+        lines = text.splitlines()
+        out_lines = []
+        inside_code_block = False
+        for line in lines:
+            stripped = line.lstrip()
+
+            # Переключение режима для блоков кода
+            if stripped.startswith("```"):
+                inside_code_block = not inside_code_block
+                out_lines.append(line)
+                continue
+
+            if not inside_code_block:
+                # Заголовки: #### Title #### -> *Title*
+                m = re.match(r'^\s*(#{1,6})\s+(.+?)\s*$', line)
+                if m:
+                    content = m.group(2)
+                    # Удаляем возможные завершающие #
+                    content = re.sub(r'\s*#+\s*$', '', content)
+                    line = f"*{content}*"
+
+            out_lines.append(line)
+        return "\n".join(out_lines)
+    except Exception as e:
+        logger.debug(f"format_for_telegram_markdown error: {e}")
+        return text
+
+
 async def send_long_message(context: CallbackContext, chat_id: int, text: str, reply_to_message_id: int = None):
+    # Подготавливаем текст под Telegram Markdown (в т.ч. заголовки ### -> *...*)
+    text = format_for_telegram_markdown(text)
+
     parts = []
     while text:
         if len(text) > 4000:
@@ -46,8 +91,8 @@ async def send_long_message(context: CallbackContext, chat_id: int, text: str, r
             text = ""
 
     for i, part in enumerate(parts):
+        safe_part = _escape_markdown(part)
         try:
-            safe_part = _escape_markdown(part)
             if i == 0 and reply_to_message_id:
                 await context.bot.send_message(
                     chat_id=chat_id,
@@ -61,33 +106,26 @@ async def send_long_message(context: CallbackContext, chat_id: int, text: str, r
                     text=safe_part,
                     parse_mode=ParseMode.MARKDOWN
                 )
-            await asyncio.sleep(0.5)
         except Exception as e:
-            logger.error(f"Ошибка отправки части {i+1}/{len(parts)}: {str(e)}")
-
-
-async def delete_advertisement(update: Update, context: CallbackContext):
-    message = update.effective_message
-    text = message.text or message.caption or ""
-    
-    logger.info(f"Проверка на рекламу в сообщении {message.message_id}: {text[:50]}...")
-
-    if ADVERTISEMENT_REGEX.search(text):
-        # Пытаемся удалить только рекламный блок из текста
-        stripped = strip_advertisement(text)
-        if stripped != text:
+            logger.debug(f"Markdown send failed for part {i+1}/{len(parts)}: {e}")
             try:
-                if message.text:
-                    await message.edit_text(stripped, parse_mode=ParseMode.MARKDOWN)
-                elif message.caption:
-                    await message.edit_caption(stripped, parse_mode=ParseMode.MARKDOWN)
-                logger.info(f"Обрезан рекламный блок в сообщении {message.message_id} чата {message.chat.id}")
-                # Не прерываем другие хендлеры
-                return True
-            except Exception as e:
-                logger.debug(f"Не удалось отредактировать сообщение для удаления рекламы: {e}")
-        # Если не удалось отредактировать (например, чужое сообщение) — просто продолжим
-    return False
+                if i == 0 and reply_to_message_id:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=safe_part,
+                        reply_to_message_id=reply_to_message_id
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=safe_part
+                    )
+            except Exception as e2:
+                logger.error(f"Ошибка отправки части {i+1}/{len(parts)}: {str(e2)}")
+        await asyncio.sleep(0.5)
+
+
+
 
 
 def strip_advertisement(text: str) -> str:
@@ -98,5 +136,3 @@ def strip_advertisement(text: str) -> str:
     except Exception as e:
         logger.debug(f"strip_advertisement error: {e}")
         return text
-
-

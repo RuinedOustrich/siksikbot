@@ -16,6 +16,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
                 chat_id = getattr(update, 'effective_chat', None).id if getattr(update, 'effective_chat', None) else None
                 if chat_id:
                     context_manager.add_cleanup_message(chat_id, msg.message_id)
+                    # При глобальной ошибке НЕ очищаем список - сообщение об ошибке само добавлено в список
+                    # для удаления при следующем успешном ответе
             except Exception:
                 pass
     except Exception as e:
