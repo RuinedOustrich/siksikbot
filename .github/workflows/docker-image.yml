@@ -1,0 +1,35 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scrape build info
+        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      - name: Build and push
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # https://stackoverflow.com/questions/67051284/how-to-set-a-dockerfile-arg-in-github-actions
+          # https://stackoverflow.com/a/63619526/315168
+          build-args: |
+            GIT_VERSION_TAG=${{ env.RELEASE_VERSION }}
+            GIT_COMMIT_MESSAGE=${{ github.event.head_commit.message }}
+            GIT_VERSION_HASH=${{ github.sha }}
+      - uses: actions/checkout@v4
+      - name: define builder
+        run: docker buildx create --use  
+      - name: Build the Docker image
+        run: docker buildx build -f ./docker/Dockerfile --platform linux/amd64,linux/arm64 --tag my-image-name:$(date +%s) --push .  
