@@ -1,1 +1,1 @@
-# DeepSeek Telegram Bot
+# SeekSeek Telegram Bot
