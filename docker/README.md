@@ -6,7 +6,6 @@
 
 - `Dockerfile` - Многостадийная сборка Docker образа с оптимизацией размера
 - `docker-compose.yml` - Конфигурация для запуска с docker-compose
-- `requirements.txt` - Python зависимости для Docker образа
 - `healthcheck.py` - Скрипт проверки состояния контейнера
 - `README.md` - Документация (этот файл)
 
