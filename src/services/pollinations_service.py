@@ -592,8 +592,42 @@ def _is_refusal_response(response_text: str) -> bool:
     return False
 
 
+def _validate_messages_and_token(messages: list, token: str) -> tuple[bool, str]:
+    """Валидирует сообщения и токен, возвращает (is_valid, error_message)"""
+    if not token or token.strip() == "":
+        logger.error("Токен Pollinations не предоставлен")
+        return False, "❌ Ошибка конфигурации: токен не предоставлен"
+    
+    if not messages or len(messages) == 0:
+        logger.error("Список сообщений пуст")
+        return False, "❌ Ошибка: нет сообщений для отправки"
+    
+    # Проверяем формат сообщений
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or 'role' not in msg or 'content' not in msg:
+            logger.error(f"Неверный формат сообщения {i}: {msg}")
+            return False, "❌ Ошибка: неверный формат сообщений"
+    
+    # Проверяем общую длину сообщений
+    total_length = sum(len(str(msg.get('content', ''))) for msg in messages)
+    if total_length > 100000:  # Лимит в 100KB
+        logger.warning(f"Общая длина сообщений слишком большая: {total_length} символов")
+        # Обрезаем сообщения, оставляя только последние
+        while total_length > 50000 and len(messages) > 1:
+            messages.pop(0)  # Удаляем самое старое сообщение
+            total_length = sum(len(str(msg.get('content', ''))) for msg in messages)
+        logger.info(f"Обрезали сообщения до {len(messages)} сообщений, общая длина: {total_length}")
+    
+    return True, ""
+
+
 def send_to_pollinations(messages: list, token: str, model: str = "openai") -> str:
     """Отправляет POST-запрос к Pollinations.AI API и возвращает ответ"""
+    # Валидация входных данных
+    is_valid, error_message = _validate_messages_and_token(messages, token)
+    if not is_valid:
+        return error_message
+    
     url = "https://text.pollinations.ai/openai"
     headers = {
         "Content-Type": "application/json",
@@ -604,11 +638,16 @@ def send_to_pollinations(messages: list, token: str, model: str = "openai") -> s
         "model": model,
         "messages": messages,
         "seed": 42,
-        "temperature": 0.7,
         "max_tokens": 2000
     }
 
     try:
+        # Логируем детали запроса для диагностики
+        logger.info(f"Отправляем запрос к Pollinations API: {url}")
+        logger.info(f"Headers: {headers}")
+        logger.info(f"Payload keys: {list(payload.keys())}")
+        logger.info(f"Messages count: {len(payload.get('messages', []))}")
+        
         response = requests.post(
             url,
             headers=headers,
@@ -616,7 +655,14 @@ def send_to_pollinations(messages: list, token: str, model: str = "openai") -> s
             timeout=30
         )
 
-        response.raise_for_status()
+        # Проверяем статус ответа
+        if response.status_code != 200:
+            error_text = response.text
+            logger.error(f"Pollinations API вернул статус {response.status_code}: {error_text}")
+            logger.error(f"Request headers: {headers}")
+            logger.error(f"Request payload: {payload}")
+            return f"❌ Ошибка API (статус {response.status_code}): {error_text}"
+
         result = response.json()
 
         if "choices" in result and len(result["choices"]) > 0:
@@ -638,6 +684,12 @@ def send_to_pollinations(messages: list, token: str, model: str = "openai") -> s
     except requests.exceptions.Timeout:
         logger.error("Таймаут запроса к Pollinations API")
         return "❌ Таймаут запроса к API. Попробуйте снова."
+    except requests.exceptions.HTTPError as e:
+        error_text = e.response.text if e.response else ""
+        logger.error(f"HTTP ошибка {e.response.status_code if e.response else 'unknown'} от Pollinations API: {error_text}")
+        logger.error(f"Request headers: {headers}")
+        logger.error(f"Request payload: {payload}")
+        return f"❌ Ошибка API (статус {e.response.status_code if e.response else 'unknown'}): {error_text}"
     except requests.exceptions.RequestException as e:
         logger.error(f"Ошибка запроса к Pollinations: {str(e)}")
         return f"❌ Ошибка сети: {str(e)}"
@@ -651,6 +703,11 @@ def send_to_pollinations(messages: list, token: str, model: str = "openai") -> s
 
 async def send_to_pollinations_async(messages: list, token: str, model: str = "openai") -> str:
     """Асинхронно отправляет POST-запрос к Pollinations.AI API и возвращает ответ"""
+    # Валидация входных даннpых
+    is_valid, error_message = _validate_messages_and_token(messages, token)
+    if not is_valid:
+        return error_message
+    
     url = "https://text.pollinations.ai/openai"
     headers = {
         "Content-Type": "application/json",
@@ -661,14 +718,26 @@ async def send_to_pollinations_async(messages: list, token: str, model: str = "o
         "model": model,
         "messages": messages,
         "seed": 42,
-        "temperature": 0.7,
         "max_tokens": 2000
     }
 
     try:
         session = await get_http_session()
         async with session.post(url, headers=headers, json=payload) as response:
-            response.raise_for_status()
+            # Логируем детали запроса для диагностики
+            logger.info(f"Отправляем запрос к Pollinations API: {url}")
+            logger.info(f"Headers: {headers}")
+            logger.info(f"Payload keys: {list(payload.keys())}")
+            logger.info(f"Messages count: {len(payload.get('messages', []))}")
+            
+            # Проверяем статус ответа
+            if response.status != 200:
+                error_text = await response.text()
+                logger.error(f"Pollinations API вернул статус {response.status}: {error_text}")
+                logger.error(f"Request headers: {headers}")
+                logger.error(f"Request payload: {payload}")
+                return f"❌ Ошибка API (статус {response.status}): {error_text}"
+            
             result = await response.json()
 
             if "choices" in result and len(result["choices"]) > 0:
@@ -690,6 +759,16 @@ async def send_to_pollinations_async(messages: list, token: str, model: str = "o
     except asyncio.TimeoutError:
         logger.error("Таймаут запроса к Pollinations API")
         return "❌ Таймаут запроса к API. Попробуйте снова."
+    except aiohttp.ClientResponseError as e:
+        error_text = ""
+        try:
+            error_text = await e.response.text()
+        except:
+            pass
+        logger.error(f"HTTP ошибка {e.status} от Pollinations API: {error_text}")
+        logger.error(f"Request headers: {headers}")
+        logger.error(f"Request payload: {payload}")
+        return f"❌ Ошибка API (статус {e.status}): {error_text}"
     except aiohttp.ClientError as e:
         logger.error(f"Ошибка запроса к Pollinations: {str(e)}")
         return f"❌ Ошибка сети: {str(e)}"

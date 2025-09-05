@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatType, ParseMode
 from telegram.ext import CallbackContext
@@ -319,7 +320,8 @@ async def _show_style_selection(chat_id: int, bot, size_key: str, width: int, he
         "step": "style_selection",
         "size_key": size_key,
         "width": width,
-        "height": height
+        "height": height,
+        "timestamp": time.time()
     })
     
     # Создаем кнопки для стилей (по 2 в ряд)
@@ -357,7 +359,8 @@ async def _request_description(chat_id: int, bot, size_key: str, width: int, hei
         "size_key": size_key,
         "width": width,
         "height": height,
-        "style_key": style_key
+        "style_key": style_key,
+        "timestamp": time.time()
     }
     context_manager.set_user_state(chat_id, "imagine", state_data)
     
@@ -499,6 +502,7 @@ async def _generate_image(chat_id: int, bot, prompt: str, width: int, height: in
             else:
                 await status.edit_text("❌ Не удалось сгенерировать изображение")
             context_manager.add_cleanup_message(chat_id, status.message_id)
+            context_manager.clear_user_state(chat_id, "imagine")
             return
         
         # Автоматический анализ сгенерированного изображения для контекста
@@ -564,6 +568,9 @@ async def _generate_image(chat_id: int, bot, prompt: str, width: int, height: in
                 logger.info(f"Удалено сообщение с описанием изображения после ошибки: {description_message_id}")
             except Exception as delete_error:
                 logger.warning(f"Не удалось удалить сообщение с описанием {description_message_id} после ошибки: {delete_error}")
+        
+        # Очищаем состояние пользователя при ошибке
+        context_manager.clear_user_state(chat_id, "imagine")
     finally:
         context_manager.set_generating(chat_id, False, "image")
 

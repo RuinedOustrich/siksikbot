@@ -21,7 +21,7 @@ from services.pollinations_service import (
     analyze_image_async,
     _is_fallback_message,
 )
-from utils.telegram_utils import show_typing, strip_advertisement, format_for_telegram_markdown, send_long_message
+from utils.telegram_utils import show_typing, strip_advertisement, safe_format_for_telegram, send_long_message
 from utils.decorators import handle_errors, track_performance
 
 logger = logging.getLogger(__name__)
@@ -100,13 +100,22 @@ async def process_queue(context: CallbackContext, chat_id: int):
                 if len(ai_response_clean) > 4000:
                     await send_long_message(context, chat_id, ai_response_clean, q_reply_to)
                 else:
-                    formatted = format_for_telegram_markdown(ai_response_clean)
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=formatted,
-                        parse_mode=ParseMode.MARKDOWN,
-                        reply_to_message_id=q_reply_to
-                    )
+                    formatted = safe_format_for_telegram(ai_response_clean)
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=formatted,
+                            parse_mode=ParseMode.MARKDOWN,
+                            reply_to_message_id=q_reply_to
+                        )
+                    except Exception as e:
+                        logger.debug(f"Markdown send failed in queue: {e}")
+                        # Fallback на обычный текст
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=ai_response_clean,
+                            reply_to_message_id=q_reply_to
+                        )
                 context_manager.add_message(chat_id, "assistant", ai_response_clean)
                 for mid in context_manager.consume_cleanup_messages(chat_id):
                     try:
@@ -306,8 +315,14 @@ async def handle_message(update: Update, context: CallbackContext):
     # Проверяем, ожидает ли пользователь ввода для многошагового процесса
     imagine_state = context_manager.get_user_state(chat_id, "imagine")
     if imagine_state and imagine_state.get("step") == "waiting_description":
-        await _handle_imagine_description(update, context, imagine_state, user_message)
-        return
+        # Проверяем, не прошло ли слишком много времени (5 минут)
+        timestamp = imagine_state.get("timestamp", 0)
+        if time.time() - timestamp > 300:  # 5 минут
+            logger.info(f"Состояние imagine истекло для чата {chat_id}, очищаем")
+            context_manager.clear_user_state(chat_id, "imagine")
+        else:
+            await _handle_imagine_description(update, context, imagine_state, user_message)
+            return
     
     # Валидация сообщения
     if not _validate_user_message(user_message):
@@ -385,24 +400,41 @@ async def handle_message(update: Update, context: CallbackContext):
         if ai_response:
             # Удаляем рекламный блок в конце ответа, если есть
             ai_response_clean = strip_advertisement(ai_response)
-            formatted = format_for_telegram_markdown(ai_response_clean)
+            formatted = safe_format_for_telegram(ai_response_clean)
             if len(formatted) > 4000:
                 # Разбиваем на части и отправляем с маркерами
                 parts = smart_split_telegram(formatted, 4000)
                 parts = add_part_markers(parts)
                 for i, part in enumerate(parts):
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=part,
-                        parse_mode=ParseMode.MARKDOWN,
-                        reply_to_message_id=message.message_id if i == 0 else None,
-                    )
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=part,
+                            parse_mode=ParseMode.MARKDOWN,
+                            reply_to_message_id=message.message_id if i == 0 else None,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Markdown send failed for part {i+1}/{len(parts)}: {e}")
+                        # Fallback на обычный текст
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=part,
+                            reply_to_message_id=message.message_id if i == 0 else None,
+                        )
             else:
-                await message.reply_text(
-                    formatted,
-                    reply_to_message_id=message.message_id,
-                    parse_mode=ParseMode.MARKDOWN
-                )
+                try:
+                    await message.reply_text(
+                        formatted,
+                        reply_to_message_id=message.message_id,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception as e:
+                    logger.debug(f"Markdown send failed: {e}")
+                    # Fallback на обычный текст
+                    await message.reply_text(
+                        ai_response_clean,
+                        reply_to_message_id=message.message_id
+                    )
 
             context_manager.add_message(chat_id, "assistant", ai_response_clean)
             # Удаляем накопленные предупреждения/ошибки после успешного ответа
@@ -625,24 +657,41 @@ async def handle_voice(update: Update, context: CallbackContext):
         if ai_response:
             # Удаляем рекламный блок в конце ответа, если есть
             ai_response_clean = strip_advertisement(ai_response)
-            formatted = format_for_telegram_markdown(ai_response_clean)
+            formatted = safe_format_for_telegram(ai_response_clean)
             if len(formatted) > 4000:
                 # Для голосовых пока используем старую схему: отправка частями без стриминга
                 parts = smart_split_telegram(formatted, 4000)
                 parts = add_part_markers(parts)
                 for i, part in enumerate(parts):
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=part,
-                        parse_mode=ParseMode.MARKDOWN,
-                        reply_to_message_id=message.message_id if i == 0 else None,
-                    )
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=part,
+                            parse_mode=ParseMode.MARKDOWN,
+                            reply_to_message_id=message.message_id if i == 0 else None,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Markdown send failed for part {i+1}/{len(parts)}: {e}")
+                        # Fallback на обычный текст
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=part,
+                            reply_to_message_id=message.message_id if i == 0 else None,
+                        )
             else:
-                await message.reply_text(
-                    formatted,
-                    reply_to_message_id=message.message_id,
-                    parse_mode=ParseMode.MARKDOWN
-                )
+                try:
+                    await message.reply_text(
+                        formatted,
+                        reply_to_message_id=message.message_id,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception as e:
+                    logger.debug(f"Markdown send failed: {e}")
+                    # Fallback на обычный текст
+                    await message.reply_text(
+                        ai_response_clean,
+                        reply_to_message_id=message.message_id
+                    )
 
             context_manager.add_message(chat_id, "assistant", ai_response_clean)
             # Удаляем накопленные предупреждения/ошибки после успешного ответа
@@ -687,7 +736,6 @@ async def handle_image(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     user = update.effective_user
     
-    
     # Проверяем rate limiting
     if not context_manager.check_rate_limit(user.id, chat_id, min_interval=2.0):
         logger.info(f"Rate limit заблокирован для пользователя {user.id} в чате {chat_id} (изображение)")
@@ -719,88 +767,151 @@ async def handle_image(update: Update, context: CallbackContext):
         context_manager.add_cleanup_message(chat_id, err_msg.message_id)
         return
 
-    context_manager.set_generating(chat_id, True, "image")
-    typing_task = asyncio.create_task(show_typing(context, chat_id))
-    status_message = None
+    # Проверяем групповой режим для изображений
+    should_analyze = True
+    if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        settings_s = context_manager.get_settings(chat_id)
+        group_mode = settings_s.get("group_mode", "mention_or_reply")
 
+        # Проверяем упоминание бота в подписи к изображению
+        caption = message.caption or ""
+        mentioned = False
+        if context.bot.username:
+            bot_username = context.bot.username.lower()
+            if f"@{bot_username}" in caption.lower():
+                mentioned = True
+
+        # Проверяем ответ на сообщение бота
+        replied = False
+        if message.reply_to_message:
+            replied_user = message.reply_to_message.from_user
+            if replied_user and replied_user.id == context.bot.id:
+                replied = True
+
+        if group_mode == "mention_or_reply":
+            if not (mentioned or replied):
+                should_analyze = False
+                logger.info(f"Группа {chat_id}: режим mention_or_reply — изображение добавлено в контекст без анализа")
+        elif group_mode == "always":
+            pass
+        else:
+            if group_mode == "mention_only":
+                if not mentioned:
+                    should_analyze = False
+                    logger.info(f"Группа {chat_id}: режим mention_only — изображение добавлено в контекст без анализа")
+            elif group_mode == "reply_only":
+                if not replied:
+                    should_analyze = False
+                    logger.info(f"Группа {chat_id}: режим reply_only — изображение добавлено в контекст без анализа")
+            elif group_mode == "silent":
+                logger.info(f"Группа {chat_id}: режим silent — игнор изображения")
+                return
+
+    # Скачиваем файл для анализа или добавления в контекст
+    file = await context.bot.get_file(photo.file_id)
+    temp_dir = tempfile.mkdtemp()
+    image_path = os.path.join(temp_dir, f"image_{uuid.uuid4()}.jpg")
+    
     try:
-        # Скачиваем файл
-        status_message = await message.reply_text("🖼️ Анализирую изображение...")
-        
-        file = await context.bot.get_file(photo.file_id)
-        temp_dir = tempfile.mkdtemp()
-        image_path = os.path.join(temp_dir, f"image_{uuid.uuid4()}.jpg")
-        
         await file.download_to_drive(image_path)
+        
+        if should_analyze:
+            # Анализируем изображение и показываем результат
+            context_manager.set_generating(chat_id, True, "image")
+            typing_task = asyncio.create_task(show_typing(context, chat_id))
+            status_message = None
 
-        # Анализируем изображение
-        pollinations_token = settings.pollinations_token
-        if not pollinations_token:
-            logger.error("POLLINATIONS_TOKEN не установлен!")
-            await message.reply_text("Ошибка конфигурации бота. Пожалуйста, сообщите администратору.")
-            return
+            try:
+                status_message = await message.reply_text("🖼️ Анализирую изображение...")
+                
+                pollinations_token = settings.pollinations_token
+                if not pollinations_token:
+                    logger.error("POLLINATIONS_TOKEN не установлен!")
+                    await message.reply_text("Ошибка конфигурации бота. Пожалуйста, сообщите администратору.")
+                    return
 
-        analysis = await analyze_image_async(
-            image_path=image_path,
-            token=pollinations_token
-        )
+                analysis = await analyze_image_async(
+                    image_path=image_path,
+                    token=pollinations_token
+                )
 
+                if not analysis:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=status_message.message_id,
+                        text="❌ Не удалось проанализировать изображение"
+                    )
+                    context_manager.add_cleanup_message(chat_id, status_message.message_id)
+                    return
+
+                # Показываем анализ изображения пользователю
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=status_message.message_id,
+                    text=f"🖼️ **Анализ изображения:**\n{analysis}\n\n💡 Теперь вы можете задать мне вопрос об этом изображении!"
+                )
+
+                # Добавляем информацию об изображении в контекст
+                context_manager.add_image_context(chat_id, analysis)
+                
+                # Удаляем накопленные предупреждения/ошибки после успешного анализа
+                for mid in context_manager.consume_cleanup_messages(chat_id):
+                    try:
+                        await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                logger.exception("Ошибка в handle_image при анализе")
+                if status_message:
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=status_message.message_id,
+                            text=f"❌ Ошибка: {str(e)[:1000]}"
+                        )
+                        context_manager.add_cleanup_message(chat_id, status_message.message_id)
+                    except Exception:
+                        err = await message.reply_text(f"❌ Произошла ошибка: {str(e)[:1000]}")
+                        context_manager.add_cleanup_message(chat_id, err.message_id)
+                else:
+                    err = await message.reply_text(f"❌ Произошла ошибка: {str(e)[:1000]}")
+                    context_manager.add_cleanup_message(chat_id, err.message_id)
+                context_manager.clear_cleanup_messages(chat_id)
+            finally:
+                context_manager.set_generating(chat_id, False, "image")
+                if typing_task:
+                    typing_task.cancel()
+        else:
+            # Просто добавляем изображение в контекст без анализа
+            pollinations_token = settings.pollinations_token
+            if not pollinations_token:
+                logger.error("POLLINATIONS_TOKEN не установлен!")
+                return
+
+            # Анализируем изображение для добавления в контекст (без показа пользователю)
+            analysis = await analyze_image_async(
+                image_path=image_path,
+                token=pollinations_token
+            )
+
+            if analysis:
+                # Добавляем информацию об изображении в контекст
+                context_manager.add_image_context(chat_id, analysis)
+                logger.info(f"Изображение добавлено в контекст для чата {chat_id} без показа анализа")
+            else:
+                logger.warning(f"Не удалось проанализировать изображение для контекста в чате {chat_id}")
+
+    except Exception as e:
+        logger.exception("Ошибка в handle_image при скачивании файла")
+        err = await message.reply_text(f"❌ Произошла ошибка при обработке изображения: {str(e)[:1000]}")
+        context_manager.add_cleanup_message(chat_id, err.message_id)
+    finally:
         # Очищаем временные файлы
         try:
             shutil.rmtree(temp_dir)
         except Exception as e:
             logger.warning(f"Не удалось удалить временные файлы: {e}")
-
-        if not analysis:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_message.message_id,
-                text="❌ Не удалось проанализировать изображение"
-            )
-            # Добавляем сообщение об ошибке в список для удаления при следующем успешном ответе
-            context_manager.add_cleanup_message(chat_id, status_message.message_id)
-            return
-
-        # Показываем анализ изображения пользователю
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=status_message.message_id,
-            text=f"🖼️ **Анализ изображения:**\n{analysis}\n\n💡 Теперь вы можете задать мне вопрос об этом изображении!"
-        )
-
-        # Добавляем информацию об изображении в контекст как системное сообщение
-        context_manager.add_image_context(chat_id, analysis)
-        
-        # Удаляем накопленные предупреждения/ошибки после успешного анализа
-        for mid in context_manager.consume_cleanup_messages(chat_id):
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=mid)
-            except Exception:
-                pass
-
-    except Exception as e:
-        logger.exception("Ошибка в handle_image")
-        if status_message:
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=status_message.message_id,
-                    text=f"❌ Ошибка: {str(e)[:1000]}"
-                )
-                # Добавляем отредактированное сообщение об ошибке в список для удаления
-                context_manager.add_cleanup_message(chat_id, status_message.message_id)
-            except Exception:
-                err = await message.reply_text(f"❌ Произошла ошибка: {str(e)[:1000]}")
-                context_manager.add_cleanup_message(chat_id, err.message_id)
-        else:
-            err = await message.reply_text(f"❌ Произошла ошибка: {str(e)[:1000]}")
-            context_manager.add_cleanup_message(chat_id, err.message_id)
-        # При ошибке очищаем список сообщений для удаления
-        context_manager.clear_cleanup_messages(chat_id)
-    finally:
-        context_manager.set_generating(chat_id, False, "image")
-        if typing_task:
-            typing_task.cancel()
 
 
 async def _handle_imagine_description(update: Update, context: CallbackContext, imagine_state: dict, user_message: str):
